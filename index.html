@@ -1,1 +1,291 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Pengolahan Citra - Steganografi (LSB)</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin:0; background: #fafafa;}
+    .toolbar { padding:12px; background: #eee; display:flex; gap:7px; }
+    .main { display: flex; gap: 15px; padding: 16px;}
+    .col { flex:1; padding: 8px; background: #fff; border-radius: 8px; box-shadow: 2px 4px 12px #eee;}
+    .title { font-weight:bold; font-size:1em; margin-bottom:3px;}
+    textarea, input, button { font-family: inherit; font-size: 1em;}
+    .imagebox { border:1px solid #ddd; min-height:180px; display:flex;justify-content:center;align-items:center;}
+    #label_ori_img img, #label_stego_img img { max-width:320px; max-height:190px; }
+    .outtext { background:#f9fbe7; border-radius:5px; padding:8px; font-family:Consolas,monospace;}
+    button { padding:5px 16px;}
+    .labelframe { border:1px solid #ccc; border-radius:6px; margin:7px 0; padding:7px;}
+    .tblbit { font-family:Consolas,monospace; font-size:0.95em;}
+    .tblbit th,.tblbit td {padding:2px 6px;}
+    .tblbit th {background:#eee;}
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="btn_load_sample">Load Sample</button>
+    <button id="btn_open_image">Open Image...</button>
+    <button id="btn_save_stego">Save Stegano...</button>
+    <button id="btn_open_pdf">Open Material PDF</button>
+  </div>
+  <div class="main">
+    <!-- Kolom kiri -->
+    <div class="col">
+      <div class="title">Citra Asli</div>
+      <div class="imagebox" id="label_ori_img">(belum ada citra)</div>
+      <div class="labelframe">
+        <div><b>Bit / RGB (Asli)</b>
+          <select id="selector_bits_ori">
+            <option value="bit">Bit</option>
+            <option value="rgb">RGB</option>
+          </select>
+        </div>
+        <div id="table_bits_ori" style="overflow:auto; max-height:170px;"></div>
+      </div>
+    </div>
+    <!-- Kolom tengah -->
+    <div class="col">
+      <div id="label_info" style="color:#444;">Tidak ada citra.</div>
+      <div class="title">Input / Stegano Text</div>
+      <textarea id="text_input" rows="6" style="width:99%"></textarea>
+      <div id="label_chars" style="margin-top:4px;">0 karakter</div>
+      <div style="margin:8px 0;">
+        <button id="btn_process">Process Stegano Text</button>
+        <button id="btn_extract">Extract Teks dari Hasil</button>
+      </div>
+      <div class="title">Output (contoh bit awal)</div>
+      <pre id="text_output" class="outtext">Extracted text:</pre>
+    </div>
+    <!-- Kolom kanan -->
+    <div class="col">
+      <div class="title">Citra Hasil Stegano</div>
+      <div class="imagebox" id="label_stego_img">(belum ada citra)</div>
+      <div class="labelframe">
+        <div><b>Bit / RGB (Hasil)</b>
+          <select id="selector_bits_stego">
+            <option value="bit">Bit</option>
+            <option value="rgb">RGB</option>
+          </select>
+        </div>
+        <div id="table_bits_stego" style="overflow:auto; max-height:170px;"></div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="file_img" accept="image/png,image/jpeg" style="display:none;">
+  <input type="file" id="file_pdf" accept="application/pdf" style="display:none;">
+  <a id="save_link" style="display:none;"></a>
+<script>
+const DELIM = "<<<END>>>";
+const DEFAULT_STEGO_FILENAME = "stego_output.png";
+let original_img = null;   // HTMLImageElement
+let stego_img = null;      // Canvas (stego)
+let ori_img_data = null;
+let stego_img_data = null;
 
+function text_to_bits(text) {
+  return text.split('').map(c=>c.charCodeAt(0).toString(2).padStart(8,'0')).join('');
+}
+function bits_to_text(bits) {
+  let chars = [];
+  for(let i=0; i<bits.length; i+=8){
+    let byte=bits.substr(i,8); if(byte.length<8)break;
+    chars.push(String.fromCharCode(parseInt(byte,2)));
+  }
+  return chars.join('');
+}
+
+// Render tabel seperti pada gambar, mode bit/rgb, 5 kolom
+function render_bit_rgb_table(imgdata, w, h, mode="bit", max_rows=12, cols=5){
+  if (!imgdata) return "<i>(belum ada citra)</i>";
+  let total = w*h, rows = Math.min(max_rows, Math.ceil(total/cols));
+  let html = '<table class="tblbit" border="1" style="border-collapse:collapse;width:100%;"><tr><th></th>';
+  for(let c=1;c<=cols;c++) html += `<th>${c}</th>`;
+  html += '</tr>';
+  let i=0;
+  for(let r=0;r<rows;r++){
+    html += `<tr><td>${r+1}</td>`;
+    for(let c=0;c<cols;c++){
+      if(i<total){
+        let idx = i*4, R = imgdata.data[idx], G = imgdata.data[idx+1], B = imgdata.data[idx+2];
+        if(mode=="bit")
+          html += `<td>${R.toString(2).padStart(8,'0')} ${G.toString(2).padStart(8,'0')} ${B.toString(2).padStart(8,'0')}</td>`;
+        else
+          html += `<td>${R},${G},${B}</td>`;
+      }else{
+        html += `<td></td>`;
+      }
+      i++;
+    }
+    html += `</tr>`;
+  }
+  html += '</table>';
+  return html;
+}
+
+function update_char_count() {
+  let txt = document.getElementById("text_input").value;
+  let cnt = txt.replace(/\n$/,"").length;
+  document.getElementById("label_chars").textContent = `${cnt} karakter`;
+}
+document.getElementById("text_input").addEventListener("input", update_char_count);
+
+function load_image_from_path(path, isSample=false) {
+  let img = new Image();
+  img.onload = function(){
+    original_img = img;
+    ori_img_data = null;
+    stego_img = null;
+    stego_img_data = null;
+    // column kiri tampil citra
+    let label = document.getElementById('label_ori_img');
+    label.innerHTML = "";
+    label.appendChild(img.cloneNode());
+    // kolom kanan kosongkan
+    let labelSt = document.getElementById('label_stego_img');
+    labelSt.innerHTML = "(belum ada citra)";
+    // info kapasitas
+    let w=img.width, h=img.height;
+    let total_pixels = w*h, capacity_bits=total_pixels*3, capacity_chars = Math.floor(capacity_bits/8);
+    document.getElementById('label_info').textContent=
+      `${w} x ${h} = ${total_pixels} pixel   |   Kapasitas: ${capacity_bits} bit ≈ ${capacity_chars} char`;
+
+    // bit table asli
+    let canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    let ctx = canvas.getContext('2d');
+    ctx.drawImage(img,0,0);
+    ori_img_data = ctx.getImageData(0,0,w,h);
+    document.getElementById('table_bits_ori').innerHTML =
+      render_bit_rgb_table(ori_img_data, w, h, document.getElementById('selector_bits_ori').value);
+
+    // kosongkan bit table stego
+    document.getElementById('table_bits_stego').innerHTML = "<i>(belum ada hasil stegano)</i>";
+    // reset output
+    document.getElementById('text_output').textContent = "Extracted text:\n";
+  };
+  img.onerror=function(){
+    alert("Gagal membuka citra."); return;
+  }
+  img.src = path;
+}
+
+// load image
+document.getElementById("btn_open_image").onclick = ()=>document.getElementById("file_img").click();
+document.getElementById("file_img").onchange = function() {
+  if (this.files && this.files[0]){
+    let url = URL.createObjectURL(this.files[0]);
+    load_image_from_path(url);
+  }
+};
+// load sample
+document.getElementById("btn_load_sample").onclick = function() {
+  let url = (window.location.origin+window.location.pathname).replace(/[^\/]+$/,"") + "sample.png";
+  let imgtest = new Image();
+  imgtest.onload=function(){ load_image_from_path(url,true); }
+  imgtest.onerror=function(){
+    alert("File 'sample.png' tidak ditemukan.\nSilakan pilih citra secara manual."); 
+    document.getElementById("btn_open_image").click();
+  }
+  imgtest.src = url;
+};
+// open pdf
+document.getElementById("btn_open_pdf").onclick = ()=>document.getElementById("file_pdf").click();
+document.getElementById("file_pdf").onchange=function(){
+  if(!this.files[0])return;
+  let url = URL.createObjectURL(this.files[0]);
+  window.open(url, '_blank');
+};
+// selector bit/rgb event
+document.getElementById('selector_bits_ori').onchange = ()=>{
+  if(ori_img_data) document.getElementById('table_bits_ori').innerHTML =
+    render_bit_rgb_table(ori_img_data, ori_img_data.width, ori_img_data.height,
+      document.getElementById('selector_bits_ori').value
+    );
+};
+document.getElementById('selector_bits_stego').onchange = ()=>{
+  if(stego_img_data) document.getElementById('table_bits_stego').innerHTML =
+    render_bit_rgb_table(stego_img_data, stego_img_data.width, stego_img_data.height,
+      document.getElementById('selector_bits_stego').value
+    );
+};
+
+function show_image_on_label(canvas, label_id){
+  let label = document.getElementById(label_id);
+  label.innerHTML = ""; // clear
+  let img = new Image();
+  img.src = canvas.toDataURL();
+  label.appendChild(img);
+}
+
+// ===== LOGIKA PROSES =====
+document.getElementById("btn_process").onclick = function() {
+  if (!original_img || !ori_img_data) {
+    alert("Silakan buka citra terlebih dahulu."); return;
+  }
+  let secret_text = document.getElementById("text_input").value.replace(/\n$/, "");
+  if (!secret_text.trim()){
+    alert("Teks rahasia belum diisi."); return;
+  }
+  let w=original_img.width, h=original_img.height, kapasitas=w*h*3;
+  let bits = text_to_bits(secret_text+DELIM);
+  if (bits.length > kapasitas){
+    alert(`Teks terlalu panjang! Butuh ${bits.length} bit, kapasitas hanya ${kapasitas} bit.`); return;
+  }
+  stego_img = document.createElement('canvas');
+  stego_img.width = w; stego_img.height = h;
+  let ctx = stego_img.getContext('2d');
+  ctx.drawImage(original_img,0,0);
+  let imgdata = ctx.getImageData(0,0,w,h);
+  let data = imgdata.data;
+  let bit_idx = 0;
+  for(let y=0;y<h;++y){
+    for(let x=0;x<w;++x){
+      let i = (y*w + x)*4;
+      for(let c=0;c<3;++c){
+        if(bit_idx < bits.length){
+          data[i+c] = (data[i+c] & ~1) | Number(bits[bit_idx]);
+          bit_idx++;
+        }
+      }
+      if(bit_idx>=bits.length) break;
+    }
+    if(bit_idx>=bits.length) break;
+  }
+  ctx.putImageData(imgdata,0,0);
+  stego_img_data = imgdata;
+  show_image_on_label(stego_img, 'label_stego_img');
+  document.getElementById('table_bits_stego').innerHTML =
+    render_bit_rgb_table(imgdata, w, h, document.getElementById('selector_bits_stego').value);
+  alert("Teks berhasil disisipkan ke citra (stegano dibuat).");
+};
+document.getElementById("btn_extract").onclick = function() {
+  if (!stego_img || !stego_img_data){
+    alert("Belum ada citra stegano. Lakukan proses steganografi terlebih dahulu."); return;
+  }
+  let w=stego_img.width, h=stego_img.height, imgdata = stego_img_data.data;
+  let bits = "", data = imgdata;
+  for(let y=0;y<h;++y){
+    for(let x=0;x<w;++x){
+      let i = (y*w+x)*4;
+      for(let c=0;c<3;++c){
+        bits += (data[i+c]&1).toString();
+      }
+    }
+  }
+  let text = bits_to_text(bits);
+  let end_idx = text.indexOf(DELIM);
+  let extracted = (end_idx==-1) ? text : text.substr(0,end_idx);
+  document.getElementById("text_output").textContent = "Extracted text:\n"+extracted;
+};
+document.getElementById("btn_save_stego").onclick = function(){
+  if (!stego_img) {
+    alert("Belum ada citra stegano untuk disimpan."); return;
+  }
+  let link = document.getElementById("save_link");
+  link.href = stego_img.toDataURL("image/png");
+  link.download = DEFAULT_STEGO_FILENAME;
+  link.click();
+}
+update_char_count();
+</script>
+</body>
+</html>
